@@ -2,7 +2,7 @@
 
 一个跑在浏览器里的深海生态 3D 模拟器。41 个深海物种、820 米垂直落差，鼠标键盘自由穿行于海山侧翼。
 
-**直接打开就能玩：** https://YOUR_USERNAME.github.io/abyss/
+**直接打开就能玩：** https://dzry1415926-arch.github.io/abyss-3d/
 
 ## 玩法
 
