@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>ABYSS — 交互式深海生态模拟器</title>
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="styles.css">
+<!-- 内联 favicon：避免默认请求 /favicon.ico 产生 404 -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23030a12'/><circle cx='16' cy='16' r='7' fill='none' stroke='%236fd8d2' stroke-width='1.6'/><circle cx='16' cy='16' r='2' fill='%236fd8d2'/></svg>">
+<script>
+window.__abyssErrors = [];
+window.addEventListener('error', function (e) {
+  window.__abyssErrors.push(e.message);
+  if (e.error && e.error.stack) window.__abyssErrors.push(e.error.stack.split('\n').slice(0,6).join(' | '));
+  var el = document.getElementById('errBox');
+  if (!el) { el = document.createElement('div'); el.id = 'errBox'; el.className = 'errbox'; document.body.appendChild(el); }
+  el.textContent = 'ERROR · ' + (e.message || e) + '  @ ' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || '');
+});
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="abyss-edge" aria-hidden="true"></div>
+
+<!-- ============================================================ HUD -->
+<div id="hud" class="hud is-hidden" aria-hidden="true">
+
+  <!-- ── 左上：站点与实时读数 ─────────────────────────── -->
+  <div class="hud-corner tl">
+    <div class="brand">
+      <div class="brand-title">ABYSS</div>
+      <div class="brand-sub" data-i18n="hud.site">AB-07 · 海山侧翼</div>
+    </div>
+
+    <div class="readout">
+      <div class="depth-line">
+        <span class="lbl" data-i18n="hud.depth">深度</span>
+        <span class="depth-num" id="depthVal">0000</span>
+        <span class="depth-unit">m</span>
+      </div>
+      <div class="zone-line"><span id="zoneVal">海山脊顶</span></div>
+      <div class="stat-line">
+        <span><em data-i18n="hud.temp">水温</em><b id="tempVal">4.2</b><i>°C</i></span>
+        <span><em data-i18n="hud.pres">压力</em><b id="presVal">43.1</b><i>atm</i></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 右上：语言 / 图鉴 ─────────────────────────────── -->
+  <div class="hud-corner tr">
+    <div class="lang" id="langSwitch" role="group" aria-label="Language">
+      <button type="button" data-lang="zh" class="on">中文</button>
+      <span class="lang-sep">/</span>
+      <button type="button" data-lang="en">EN</button>
+    </div>
+    <button type="button" class="ghost" id="logBtn">
+      <span data-i18n="hud.log">图鉴</span>
+      <b id="logCount">0/41</b>
+    </button>
+  </div>
+
+  <!-- ── 右侧：深度标尺 ───────────────────────────────── -->
+  <div class="depth-ruler" id="depthRuler" aria-hidden="true">
+    <div class="ruler-track"></div>
+    <div class="ruler-marker" id="rulerMarker"><span id="rulerDepth">0000</span></div>
+    <div class="ruler-ticks" id="rulerTicks"></div>
+  </div>
+
+  <!-- ── 准星 ────────────────────────────────────────── -->
+  <div class="reticle" id="reticle" aria-hidden="true">
+    <span class="r-dot"></span>
+    <span class="r-ring"></span>
+    <span class="r-c r1"></span><span class="r-c c2"></span>
+    <span class="r-c c3"></span><span class="r-c c4"></span>
+  </div>
+
+  <!-- ── 左下：操作提示（可收起） ─────────────────────── -->
+  <div class="hud-corner bl">
+    <div class="keys" id="keysPanel">
+      <button type="button" class="keys-toggle" id="keysToggle" aria-expanded="true">
+        <span data-i18n="start.controls">操作</span>
+        <i aria-hidden="true"></i>
+      </button>
+      <div class="keys-body">
+        <div class="keyrow"><span class="kbds"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span data-i18n="ctl.move">移动</span></div>
+        <div class="keyrow"><span class="kbds"><kbd>Space</kbd><kbd>C</kbd></span><span data-i18n="ctl.vertical">上浮 / 下潜</span></div>
+        <div class="keyrow"><span class="kbds"><kbd>F</kbd></span><span data-i18n="ctl.lamp">探照灯</span></div>
+        <div class="keyrow"><span class="kbds"><kbd>L</kbd></span><span data-i18n="ctl.log">图鉴</span></div>
+        <div class="keyrow"><span class="kbds"><kbd>Esc</kbd></span><span data-i18n="ctl.esc">关闭 / 解锁</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 右下：探照灯 / 移动速度 / 记录进度 ───────────── -->
+  <div class="hud-corner br">
+    <!-- 移动速度：档位 + 滑块。放在右下是因为它属于「操作设置」，
+         与探照灯同类；放在中间会挡视野，放在左上会与深度读数抢注意力。 -->
+    <div class="speed" id="speedCtl">
+      <div class="speed-head">
+        <button type="button" class="speed-toggle" id="speedToggle" aria-expanded="true" aria-controls="speedBody">
+          <span data-i18n="hud.speed">移动速度</span>
+          <b id="speedVal">1.00×</b>
+          <i aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="speed-body" id="speedBody">
+        <div class="speed-presets" role="group" aria-label="Speed presets">
+          <button type="button" data-speed="slow" data-i18n="speed.slow">慢速</button>
+          <button type="button" data-speed="normal" class="on" data-i18n="speed.normal">正常</button>
+          <button type="button" data-speed="fast" data-i18n="speed.fast">快速</button>
+        </div>
+        <div class="speed-slider">
+          <input type="range" id="speedRange" min="0.4" max="2.6" step="0.05" value="1"
+                 aria-label="Move speed multiplier">
+          <div class="speed-ticks" aria-hidden="true">
+            <span>0.4×</span><span>1.5×</span><span>2.6×</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button type="button" class="lamp-status" id="lampBtn" aria-pressed="true">
+      <span class="lamp-dot"></span>
+      <span class="lamp-label" data-i18n="hud.lamp">探照灯</span>
+      <b id="lampVal">开</b>
+    </button>
+    <div class="found-line">
+      <span data-i18n="hud.found">已记录</span>
+      <b id="foundVal">0</b>
+      <span class="slash">/</span>
+      <span id="foundTotal">41</span>
+    </div>
+  </div>
+
+  <!-- ── 目标括号 ────────────────────────────────────── -->
+  <div class="bracket is-hidden" id="bracket" aria-hidden="true">
+    <i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i>
+    <span class="bracket-dist" id="bracketDist">0 m</span>
+  </div>
+
+  <!-- ── 底部中央：掠过时的物种提示条 ─────────────────── -->
+  <div class="ticker is-hidden" id="ticker" aria-live="polite">
+    <span class="ticker-idx" id="tkIdx">01</span>
+    <span class="ticker-names">
+      <b id="tkCn">蝰鱼</b>
+      <i id="tkLatin">Chauliodus sloani</i>
+    </span>
+    <span class="ticker-hint" data-i18n="ticker.hint">点击查看</span>
+  </div>
+</div>
+
+<!-- ============================================================ 图鉴抽屉 -->
+<!-- 结构分两层：上方是标本查看器（独立 WebGL），下方是可滚动的资料。
+     原来只有下方这层，所以点开后面板里没有任何模型，视觉上就是一片空白。 -->
+<aside id="codex" class="codex" aria-hidden="true" aria-live="polite">
+
+  <!-- 标本展示区 -->
+  <section class="spec" id="spec">
+    <div class="spec-view" id="specView">
+      <!-- 实际 canvas 由 Specimen 模块注入到这里 -->
+      <div class="spec-hint" id="specHint">
+        <span data-i18n="spec.drag">拖拽旋转 · 滚轮缩放 · 双击复位</span>
+      </div>
+      <div class="spec-state" id="specState" data-state="loading">
+        <span class="spec-spin" aria-hidden="true"></span>
+        <span class="spec-state-text" id="specStateText" data-i18n="spec.loading">正在载入标本</span>
+      </div>
+      <div class="spec-tools">
+        <button type="button" class="spec-btn" id="specSpin" aria-pressed="false" title="自转">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2a5.8 5.8 0 1 1-5.5 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M2.6 2.1v3.2h3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="spec-btn" id="specReset" title="复位视角">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.2V3.4h2.8M12 9.8v2.8H9.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.6 3.6l3 3M12.4 12.4l-3-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="spec-meta" id="specMeta">
+        <span class="spec-scale" id="specScale">—</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="codex-scroll">
+    <!-- 头部：编号 / 中文名 / 英文名 / 学名 / 分类 -->
+    <header class="codex-head">
+      <div class="codex-rail">
+        <span class="codex-no" id="cxNo">01</span>
+        <span class="codex-slash">/</span>
+        <span class="codex-total" id="cxTotal">41</span>
+        <span class="codex-new" id="cxNew" data-i18n="codex.new">首次记录</span>
+      </div>
+
+      <h1 class="codex-name" id="cxName">蝰鱼</h1>
+      <div class="codex-en" id="cxEn">Sloane's viperfish</div>
+      <div class="codex-latin" id="cxLatin">Chauliodus sloani</div>
+
+      <dl class="codex-taxon">
+        <div><dt data-i18n="codex.class">纲</dt><dd id="cxOrder">辐鳍鱼纲</dd></div>
+        <div><dt data-i18n="codex.family">科</dt><dd id="cxFamily">巨口鱼科</dd></div>
+      </dl>
+    </header>
+
+    <!-- 深度尺 + 关键事实 -->
+    <section class="codex-gauge-wrap">
+      <div class="gauge-label" data-i18n="codex.range">深度分布</div>
+      <div class="gauge" id="cxGauge">
+        <div class="gauge-track"></div>
+        <div class="gauge-band" id="cxBand"></div>
+        <div class="gauge-mark" id="cxMark"></div>
+        <div class="gauge-ticks" id="cxTicks"></div>
+      </div>
+      <dl class="gauge-facts">
+        <div><dt data-i18n="codex.depth">栖息深度</dt><dd id="cxDepth">350–680 m</dd></div>
+        <div><dt data-i18n="codex.size">体型</dt><dd id="cxSize">20–30 cm</dd></div>
+        <div><dt data-i18n="codex.biolum">生物发光</dt><dd id="cxBiolum">有</dd></div>
+      </dl>
+    </section>
+
+    <!-- 正文分节 -->
+    <section class="codex-sec">
+      <h2 data-i18n="codex.habitat">栖息环境</h2>
+      <p id="cxHabitat"></p>
+    </section>
+    <section class="codex-sec">
+      <h2 data-i18n="codex.morphology">形态特征</h2>
+      <p id="cxMorph"></p>
+    </section>
+    <section class="codex-sec">
+      <h2 data-i18n="codex.ecology">生态习性</h2>
+      <p id="cxEco"></p>
+    </section>
+
+    <div class="codex-note" id="cxNote"></div>
+  </div>
+
+  <!-- 上一 / 下一 / 关闭。
+       必须放在 .codex-scroll 之外：它是 grid 的第三行（grid-area: foot）。
+       放在滚动容器里面时，grid-area 对它完全无效 —— 实测它会跟着正文
+       一起滚，offsetTop 跑到 1180（视口只有 810），页脚根本看不见。
+       这也是之前"页脚遮挡正文"问题的真正结构性原因。 -->
+  <footer class="codex-foot">
+    <div class="codex-nav">
+      <button type="button" class="nav-btn" id="cxPrev">
+        <span class="nav-arrow" aria-hidden="true">←</span>
+        <span class="nav-label" data-i18n="codex.prev">上一物种</span>
+      </button>
+      <button type="button" class="nav-btn" id="cxNext">
+        <span class="nav-label" data-i18n="codex.next">下一物种</span>
+        <span class="nav-arrow" aria-hidden="true">→</span>
+      </button>
+    </div>
+    <button type="button" class="btn-close" id="cxClose">
+      <span data-i18n="codex.close">关闭</span><kbd>Esc</kbd>
+    </button>
+  </footer>
+</aside>
+
+<!-- ============================================================ 探索记录 -->
+<aside id="logPanel" class="logpanel" aria-hidden="true">
+  <header class="log-head">
+    <div>
+      <div class="log-sub" data-i18n="log.sub">SPECIES RECORDED</div>
+      <h2 data-i18n="log.title">探索记录</h2>
+    </div>
+    <div class="log-progress"><b id="logProgress">0</b><span id="logProgressTotal">/ 41</span></div>
+  </header>
+  <div class="log-list" id="logList"></div>
+  <footer class="log-foot">
+    <p data-i18n="log.note">深度与分布为基于公开资料的模拟设定，非精确科考数据。</p>
+    <button type="button" class="btn-close" id="logClose"><span data-i18n="log.close">关闭</span><kbd>L</kbd></button>
+  </footer>
+</aside>
+
+<div class="scrim" id="scrim"></div>
+
+<!-- ============================================================ 启动页 -->
+<div id="start" class="start">
+  <div class="start-lang">
+    <button type="button" data-lang="zh" class="on">中文</button>
+    <span class="lang-sep">/</span>
+    <button type="button" data-lang="en">EN</button>
+  </div>
+
+  <div class="start-inner">
+    <div class="start-kicker" data-i18n="start.kicker">深海生态观测计划 · 站点 AB-07</div>
+
+    <h1 class="start-title">ABYSS</h1>
+    <div class="start-rule"></div>
+    <div class="start-sub" data-i18n="start.sub">海山侧翼 · 300–1120 m</div>
+    <p class="start-desc" data-i18n="start.desc"></p>
+
+    <div class="start-stats">
+      <div><b>41</b><span data-i18n="start.st.species">物种</span></div>
+      <div><b>820</b><span data-i18n="start.st.span">米落差</span></div>
+      <div><b>6</b><span data-i18n="start.st.dof">自由度</span></div>
+    </div>
+
+    <button type="button" class="btn-enter" id="enterBtn">
+      <span class="btn-enter-label" data-i18n="start.enter">开始下潜</span>
+      <span class="btn-enter-line"></span>
+    </button>
+
+    <div class="start-note" data-i18n="start.note">建议使用桌面浏览器</div>
+
+    <div class="start-keys">
+      <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span data-i18n="ctl.move">移动</span></div>
+      <div><kbd>Space</kbd><kbd>C</kbd><span data-i18n="ctl.vertical">上浮 / 下潜</span></div>
+      <div><kbd>F</kbd><span data-i18n="ctl.lamp">探照灯</span></div>
+      <div><kbd>L</kbd><span data-i18n="ctl.log">图鉴</span></div>
+    </div>
+  </div>
+
+  <div class="start-load" id="startLoad">
+    <div class="load-bar"><i id="loadBar"></i></div>
+    <span id="loadText" data-i18n="load.generating">正在构建海山地形</span>
+  </div>
+</div>
+
+<!-- ============================================================ 恢复提示 -->
+<div id="resume" class="resume is-hidden">
+  <div class="resume-title" data-i18n="resume.title">已暂停</div>
+  <div class="resume-hint" data-i18n="resume.hint">点击继续探索</div>
+</div>
+
+<div id="dragHint" class="drag-hint is-hidden" data-i18n="drag.hint">拖拽鼠标环顾 · 点击生物查看资料</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="vendor/three.bundle.js"></script>
+<script src="src/noise.js"></script>
+<script src="src/data.js"></script>
+<script src="src/data-extra.js"></script>
+<script src="src/models.js"></script>
+<script src="src/world.js"></script>
+<script src="src/creatures.js"></script>
+<script src="src/creatures-generic.js"></script>
+<script src="src/presets.js"></script>
+<script src="src/speed.js"></script>
+<script src="src/specimen.js"></script>
+<script src="src/controls.js"></script>
+<script src="src/ui.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
